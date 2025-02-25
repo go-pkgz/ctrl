@@ -196,4 +196,45 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 		// context should be canceled
 		s.Equal(context.Canceled, shutdownCtx.Err())
 	})
+
+	s.Run("concurrent signals", func() {
+		var exitCalled int32
+		mockExit := func(int) { atomic.StoreInt32(&exitCalled, 1) }
+
+		_, cancel := GracefulShutdown(
+			WithTimeout(100*time.Millisecond),
+			withOsExit(mockExit),
+		)
+		defer cancel()
+
+		// Send multiple signals concurrently
+		process, err := os.FindProcess(os.Getpid())
+		s.NoError(err)
+		go process.Signal(os.Interrupt)
+		go process.Signal(os.Interrupt)
+		go process.Signal(syscall.SIGTERM)
+
+		time.Sleep(200 * time.Millisecond)
+		s.Equal(int32(1), atomic.LoadInt32(&exitCalled))
+	})
+
+	s.Run("timeout accuracy", func() {
+		start := time.Now()
+		timeout := 200 * time.Millisecond
+		mockExit := func(int) {}
+
+		_, cancel := GracefulShutdown(
+			WithTimeout(timeout),
+			withOsExit(mockExit),
+		)
+		defer cancel()
+
+		process, err := os.FindProcess(os.Getpid())
+		s.NoError(err)
+		s.NoError(process.Signal(os.Interrupt))
+
+		time.Sleep(300 * time.Millisecond)
+		elapsed := time.Since(start)
+		s.InDelta(timeout, elapsed, float64(150*time.Millisecond))
+	})
 }
