@@ -154,7 +154,7 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 
 		// wait a bit and then send a second signal
 		time.Sleep(50 * time.Millisecond)
-		s.NoError(process.Signal(os.Interrupt))
+		s.NoError(process.Signal(os.Interrupt)) //nolint
 
 		// verify exit was called
 		time.Sleep(50 * time.Millisecond)
@@ -209,7 +209,7 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 
 		// Send multiple signals concurrently
 		process, err := os.FindProcess(os.Getpid())
-		s.NoError(err)
+		s.NoError(err) //nolint
 		go process.Signal(os.Interrupt)
 		go process.Signal(os.Interrupt)
 		go process.Signal(syscall.SIGTERM)

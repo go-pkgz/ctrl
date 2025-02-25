@@ -45,7 +45,7 @@ func TestShutdownHTTPServer(t *testing.T) {
 
 	// test shutdown with default timeout
 	err = ShutdownHTTPServer(context.Background(), server)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// server should now be shut down, trying to connect should fail
 	_, err = http.Get("http://" + server.Addr)
@@ -102,11 +102,11 @@ func TestRunHTTPServerWithContext(t *testing.T) {
 
 		// wait for server to exit
 		err = <-errCh
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		// server should now be shut down, trying to connect should fail
 		_, err = http.Get("http://" + server.Addr)
-		assert.Error(t, err)
+		require.Error(t, err)
 
 		// verify shutdown log message was recorded
 		assert.Contains(t, logBuf.String(), "shutting down HTTP server")
@@ -164,6 +164,6 @@ func TestRunHTTPServerWithContext(t *testing.T) {
 
 		// wait for result
 		err = <-errCh
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	})
 }

@@ -86,7 +86,7 @@ func RunHTTPServerWithContext(ctx context.Context, server *http.Server, startFn 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), options.shutdownTimeout)
 		defer cancel()
 
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		if err := server.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // context non-inherited intentionally
 			options.logger.Error("server shutdown error", "error", err)
 		}
 	}()
