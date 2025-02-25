@@ -1,3 +1,4 @@
+// file: ctrl/shutdown_test.go
 package ctrl
 
 import (
@@ -5,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -52,13 +54,13 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 	})
 
 	s.Run("callbacks are invoked", func() {
-		var shutdownCalled bool
-		var signalReceived os.Signal
+		var shutdownCalled int32
+		var signalReceived atomic.Value
 
 		shutdownCtx, cancel := GracefulShutdown(
 			WithOnShutdown(func(sig os.Signal) {
-				shutdownCalled = true
-				signalReceived = sig
+				atomic.StoreInt32(&shutdownCalled, 1)
+				signalReceived.Store(sig)
 			}),
 			WithoutForceExit(),
 		)
@@ -77,8 +79,8 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 			s.Fail("context not canceled within timeout")
 		}
 
-		s.True(shutdownCalled)
-		s.Equal(os.Interrupt, signalReceived)
+		s.Equal(int32(1), atomic.LoadInt32(&shutdownCalled))
+		s.Equal(os.Interrupt, signalReceived.Load())
 	})
 
 	s.Run("custom signals", func() {
@@ -103,12 +105,12 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 	})
 
 	s.Run("force exit", func() {
-		exitCode := -1
-		exitCalled := false
+		var exitCode int32 = -1
+		var exitCalled int32
 
 		mockExit := func(code int) {
-			exitCalled = true
-			exitCode = code
+			atomic.StoreInt32(&exitCalled, 1)
+			atomic.StoreInt32(&exitCode, int32(code))
 		}
 
 		_, cancel := GracefulShutdown(
@@ -125,17 +127,17 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 
 		// wait for mock exit to be called
 		time.Sleep(200 * time.Millisecond)
-		s.True(exitCalled)
-		s.Equal(42, exitCode)
+		s.Equal(int32(1), atomic.LoadInt32(&exitCalled))
+		s.Equal(int32(42), atomic.LoadInt32(&exitCode))
 	})
 
 	s.Run("second signal", func() {
-		exitCalled := false
-		exitCode := -1
+		var exitCalled int32
+		var exitCode int32 = -1
 
 		mockExit := func(code int) {
-			exitCalled = true
-			exitCode = code
+			atomic.StoreInt32(&exitCalled, 1)
+			atomic.StoreInt32(&exitCode, int32(code))
 		}
 
 		_, cancel := GracefulShutdown(
@@ -156,18 +158,18 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 
 		// verify exit was called
 		time.Sleep(50 * time.Millisecond)
-		s.True(exitCalled)
-		s.Equal(2, exitCode)
+		s.Equal(int32(1), atomic.LoadInt32(&exitCalled))
+		s.Equal(int32(2), atomic.LoadInt32(&exitCode))
 	})
 
 	s.Run("on force exit callback", func() {
-		forceExitCalled := false
+		var forceExitCalled int32
 		mockExit := func(int) {}
 
 		_, cancel := GracefulShutdown(
 			WithTimeout(50*time.Millisecond),
 			WithOnForceExit(func() {
-				forceExitCalled = true
+				atomic.StoreInt32(&forceExitCalled, 1)
 			}),
 			withOsExit(mockExit),
 		)
@@ -180,7 +182,7 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 
 		// wait for timeout and force exit
 		time.Sleep(100 * time.Millisecond)
-		s.True(forceExitCalled)
+		s.Equal(int32(1), atomic.LoadInt32(&forceExitCalled))
 	})
 
 	s.Run("manual cancel", func() {

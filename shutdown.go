@@ -21,6 +21,7 @@ func GracefulShutdown(opts ...ShutdownOption) (context.Context, context.CancelFu
 		onShutdown:  func(_ os.Signal) {},
 		onForceExit: func() {},
 		logger:      slog.Default(),
+		osExit:      os.Exit,
 	}
 
 	for _, opt := range opts {
@@ -68,7 +69,7 @@ type shutdownConfig struct {
 	onShutdown  func(os.Signal)
 	onForceExit func()
 	logger      *slog.Logger
-	osExit      func(int) // Added this field to allow mocking os.Exit for testing
+	osExit      func(int) // for testing to avoid actual os.Exit
 }
 
 // withOsExit is for testing only - allows overriding os.Exit
