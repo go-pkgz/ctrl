@@ -1,10 +1,11 @@
 # ctrl [![Build Status](https://github.com/go-pkgz/ctrl/workflows/build/badge.svg)](https://github.com/go-pkgz/ctrl/actions) [![Coverage Status](https://coveralls.io/repos/github/go-pkgz/ctrl/badge.svg?branch=master)](https://coveralls.io/github/go-pkgz/ctrl?branch=master) [![godoc](https://godoc.org/github.com/go-pkgz/ctrl?status.svg)](https://godoc.org/github.com/go-pkgz/ctrl)
 
-`ctrl` provides a set of control functions for assertions, HTTP server management, and graceful shutdown handling in Go applications. Built for Go 1.21+, it offers a clean API with flexible configuration options.
+`ctrl` provides a set of control functions for assertions, error handling, HTTP server management, and graceful shutdown handling in Go applications. Built for Go 1.21+, it offers a clean API with flexible configuration options.
 
 ## Features
 
 - Runtime assertions with optional formatted messages
+- Error-returning validation alternatives to assertions
 - HTTP server lifecycle management
 - Graceful shutdown with signal handling
 - Context-based cancellation
@@ -78,6 +79,37 @@ ctrl.AssertFuncf(func() bool {
 }, "cache size exceeded: %d/%d", cache.Size(), maxSize)
 ```
 
+### ErrorOr Functions
+
+The package provides variants of assertion functions that return errors instead of panicking. These are useful for validations where you want to return an error to the caller rather than crash the program:
+
+```go
+// Basic condition checking
+if err := ctrl.ErrorOr(user.IsAuthenticated()); err != nil {
+    return err
+}
+
+// With formatted error message
+if err := ctrl.ErrorOrf(count > 0, "expected positive count, got %d", count); err != nil {
+    return err
+}
+
+// Function-based variants
+if err := ctrl.ErrorOrFunc(func() bool {
+    return database.IsConnected()
+}); err != nil {
+    return err
+}
+
+// With custom error
+customErr := ErrDatabaseNotConnected
+if err := ctrl.ErrorOrWithErr(database.IsConnected(), customErr); err != nil {
+    return err  // Will return customErr if condition fails
+}
+```
+
+These functions are particularly useful in validators, middleware, and other scenarios where returning an error is more appropriate than panicking.
+
 ### HTTP Server Management
 
 The package helps manage HTTP server lifecycle, particularly graceful shutdown:
@@ -144,6 +176,25 @@ func processItems(items []Item) {
         // Process the item
         process(item)
     }
+}
+```
+
+### Error Validation Usage
+
+```go
+func validateRequest(req Request) error {
+    // Return error if ID is empty
+    if err := ctrl.ErrorOrf(req.ID != "", "request ID cannot be empty"); err != nil {
+        return err
+    }
+    
+    // Return custom error if size exceeds limit
+    maxSizeErr := errors.New("max size exceeded")
+    if err := ctrl.ErrorOrWithErr(req.Size <= maxSize, maxSizeErr); err != nil {
+        return err
+    }
+    
+    return nil
 }
 ```
 
@@ -241,13 +292,15 @@ WithLogger(logger *slog.Logger)
 
 ## Best Practices
 
-1. **Assertions**: Use for internal invariants, not user input validation
+1. **Assertions vs ErrorOr**: Choose based on failure severity
    ```go
-   // Good: internal invariant
+   // Use Assert for internal invariants that should never fail
    ctrl.Assert(len(buffer) >= headerSize)
    
-   // Bad: user input validation
-   ctrl.Assert(len(userInput) < maxLength) // Don't do this
+   // Use ErrorOr for validating external input
+   if err := ctrl.ErrorOr(len(userInput) < maxLength); err != nil {
+       return err
+   }
    ```
 
 2. **Graceful Shutdown**: Allow sufficient time for connections to close
@@ -299,38 +352,6 @@ if err := <-errCh; err != nil {
     log.Fatalf("server error: %v", err)
 }
 ```
-
-## ErrorOr Functions
-
-The package provides variants of assertion functions that return errors instead of panicking. These are useful for validations where you want to return an error to the caller rather than crash the program:
-
-```go
-// Basic condition checking
-if err := ctrl.ErrorOr(user.IsAuthenticated()); err != nil {
-    return err
-}
-
-// With formatted error message
-if err := ctrl.ErrorOrf(count > 0, "expected positive count, got %d", count); err != nil {
-    return err
-}
-
-// Function-based variants
-if err := ctrl.ErrorOrFunc(func() bool {
-    return database.IsConnected()
-}); err != nil {
-    return err
-}
-
-// With custom error
-customErr := ErrDatabaseNotConnected
-if err := ctrl.ErrorOrWithErr(database.IsConnected(), customErr); err != nil {
-    return err  // Will return customErr if condition fails
-}
-```
-
-These functions are particularly useful in validators, middleware, and other scenarios where returning an error is more appropriate than panicking.
-
 
 ## Contributing
 
