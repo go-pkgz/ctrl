@@ -72,13 +72,6 @@ type shutdownConfig struct {
 	osExit      func(int) // for testing to avoid actual os.Exit
 }
 
-// withOsExit is for testing only - allows overriding os.Exit
-func withOsExit(exit func(int)) ShutdownOption {
-	return func(c *shutdownConfig) {
-		c.osExit = exit
-	}
-}
-
 // WithSignals sets which signals trigger the shutdown
 func WithSignals(signals ...os.Signal) ShutdownOption {
 	return func(c *shutdownConfig) {
@@ -125,5 +118,12 @@ func WithOnForceExit(fn func()) ShutdownOption {
 func WithLogger(logger *slog.Logger) ShutdownOption {
 	return func(c *shutdownConfig) {
 		c.logger = logger
+	}
+}
+
+// withOsExit is for testing only - allows overriding os.Exit
+func withOsExit(exit func(int)) ShutdownOption { //nolint:unused // false positive, used in tests
+	return func(c *shutdownConfig) {
+		c.osExit = exit
 	}
 }
