@@ -29,9 +29,9 @@ func TestShutdownHTTPServer(t *testing.T) {
 
 	// start the server
 	go func() {
-		err := server.Serve(listener)
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Errorf("unexpected server error: %v", err)
+		serveErr := server.Serve(listener)
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			t.Errorf("unexpected server error: %v", serveErr)
 		}
 	}()
 

@@ -101,10 +101,25 @@ if err := ctrl.ErrorOrFunc(func() bool {
     return err
 }
 
+// Function-based with formatted error message
+if err := ctrl.ErrorOrFuncf(func() bool {
+    return cache.Size() < maxSize
+}, "cache size exceeded: %d/%d", cache.Size(), maxSize); err != nil {
+    return err
+}
+
 // With custom error
 customErr := ErrDatabaseNotConnected
 if err := ctrl.ErrorOrWithErr(database.IsConnected(), customErr); err != nil {
     return err  // Will return customErr if condition fails
+}
+
+// Function-based with custom error
+cacheErr := ErrCacheFull
+if err := ctrl.ErrorOrFuncWithErr(func() bool {
+    return cache.Size() < maxSize
+}, cacheErr); err != nil {
+    return err  // Will return cacheErr if condition fails
 }
 ```
 
