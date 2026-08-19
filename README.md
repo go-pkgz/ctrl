@@ -1,6 +1,6 @@
 # ctrl [![Build Status](https://github.com/go-pkgz/ctrl/workflows/build/badge.svg)](https://github.com/go-pkgz/ctrl/actions) [![Coverage Status](https://coveralls.io/repos/github/go-pkgz/ctrl/badge.svg?branch=master)](https://coveralls.io/github/go-pkgz/ctrl?branch=master) [![godoc](https://godoc.org/github.com/go-pkgz/ctrl?status.svg)](https://godoc.org/github.com/go-pkgz/ctrl)
 
-`ctrl` provides a set of control functions for assertions, error handling, HTTP server management, and graceful shutdown handling in Go applications. Built for Go 1.21+, it offers a clean API with flexible configuration options.
+`ctrl` provides a set of control functions for assertions, error handling, HTTP server management, and graceful shutdown handling in Go applications. Built for Go 1.23+, it offers a clean API with flexible configuration options.
 
 ## Features
 
