@@ -6,19 +6,22 @@ on:
     tags:
   pull_request:
 
+permissions:
+  contents: read  # to fetch code (actions/checkout)
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
       - name: set up go 1.23
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v7
         with:
           go-version: "1.23"
         id: go
-
-      - name: checkout
-        uses: actions/checkout@v3
 
       - name: build and test
         run: |
@@ -29,10 +32,9 @@ jobs:
           go build -race
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.3.1
-          skip-pkg-cache: true
+          version: v2.12
 
       - name: install goveralls
         run: |
