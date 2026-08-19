@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -20,6 +21,22 @@ type ShutdownTestSuite struct {
 
 func TestShutdownSuite(t *testing.T) {
 	suite.Run(t, new(ShutdownTestSuite))
+}
+
+// waitLimit bounds how long a test waits for something that should happen immediately.
+// it is a failure deadline rather than a delay, a loaded machine simply waits less of it.
+const waitLimit = 5 * time.Second
+
+// awaitExit blocks until the injected exit function is called and returns the code it received
+func (s *ShutdownTestSuite) awaitExit(calls <-chan int) int {
+	s.T().Helper()
+	select {
+	case code := <-calls:
+		return code
+	case <-time.After(waitLimit):
+		s.Fail("exit function was not called")
+		return -1
+	}
 }
 
 func (s *ShutdownTestSuite) TestGracefulShutdown() {
@@ -44,7 +61,7 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 		case <-shutdownCtx.Done():
 			// this is what we expect
 			s.Equal(context.Canceled, shutdownCtx.Err())
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(waitLimit):
 			s.Fail("context was not canceled within timeout")
 		}
 
@@ -75,7 +92,7 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 		select {
 		case <-shutdownCtx.Done():
 			// expected
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(waitLimit):
 			s.Fail("context not canceled within timeout")
 		}
 
@@ -99,24 +116,18 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 		select {
 		case <-shutdownCtx.Done():
 			// expected
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(waitLimit):
 			s.Fail("context not canceled after signal")
 		}
 	})
 
 	s.Run("force exit", func() {
-		var exitCode int32 = -1
-		var exitCalled int32
-
-		mockExit := func(code int) {
-			atomic.StoreInt32(&exitCalled, 1)
-			atomic.StoreInt32(&exitCode, int32(code))
-		}
+		exitCalls := make(chan int, 1)
 
 		_, cancel := GracefulShutdown(
 			WithTimeout(100*time.Millisecond),
 			WithExitCode(42),
-			withOsExit(mockExit),
+			withOsExit(func(code int) { exitCalls <- code }),
 		)
 		defer cancel()
 
@@ -125,25 +136,17 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 		s.NoError(err)
 		s.NoError(process.Signal(os.Interrupt))
 
-		// wait for mock exit to be called
-		time.Sleep(200 * time.Millisecond)
-		s.Equal(int32(1), atomic.LoadInt32(&exitCalled))
-		s.Equal(int32(42), atomic.LoadInt32(&exitCode))
+		s.Equal(42, s.awaitExit(exitCalls))
 	})
 
 	s.Run("second signal", func() {
-		var exitCalled int32
-		var exitCode int32 = -1
+		exitCalls := make(chan int, 1)
 
-		mockExit := func(code int) {
-			atomic.StoreInt32(&exitCalled, 1)
-			atomic.StoreInt32(&exitCode, int32(code))
-		}
-
-		_, cancel := GracefulShutdown(
-			WithTimeout(500*time.Millisecond),
+		// the timeout is long enough that only the second signal can cause the exit
+		shutdownCtx, cancel := GracefulShutdown(
+			WithTimeout(time.Hour),
 			WithExitCode(2),
-			withOsExit(mockExit),
+			withOsExit(func(code int) { exitCalls <- code }),
 		)
 		defer cancel()
 
@@ -152,26 +155,25 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 		s.NoError(err)
 		s.NoError(process.Signal(os.Interrupt))
 
-		// wait a bit and then send a second signal
-		time.Sleep(50 * time.Millisecond)
-		s.NoError(process.Signal(os.Interrupt)) //nolint
+		// the cancellation marks the first signal as processed
+		select {
+		case <-shutdownCtx.Done():
+		case <-time.After(waitLimit):
+			s.Fail("context not canceled after the first signal")
+			return
+		}
 
-		// verify exit was called
-		time.Sleep(50 * time.Millisecond)
-		s.Equal(int32(1), atomic.LoadInt32(&exitCalled))
-		s.Equal(int32(2), atomic.LoadInt32(&exitCode))
+		s.NoError(process.Signal(os.Interrupt))
+		s.Equal(2, s.awaitExit(exitCalls))
 	})
 
 	s.Run("on force exit callback", func() {
-		var forceExitCalled int32
-		mockExit := func(int) {}
+		forceExitCalls := make(chan struct{}, 1)
 
 		_, cancel := GracefulShutdown(
 			WithTimeout(50*time.Millisecond),
-			WithOnForceExit(func() {
-				atomic.StoreInt32(&forceExitCalled, 1)
-			}),
-			withOsExit(mockExit),
+			WithOnForceExit(func() { forceExitCalls <- struct{}{} }),
+			withOsExit(func(int) {}),
 		)
 		defer cancel()
 
@@ -180,9 +182,11 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 		s.NoError(err)
 		s.NoError(process.Signal(os.Interrupt))
 
-		// wait for timeout and force exit
-		time.Sleep(100 * time.Millisecond)
-		s.Equal(int32(1), atomic.LoadInt32(&forceExitCalled))
+		select {
+		case <-forceExitCalls:
+		case <-time.After(waitLimit):
+			s.Fail("force exit callback was not called")
+		}
 	})
 
 	s.Run("manual cancel", func() {
@@ -198,43 +202,74 @@ func (s *ShutdownTestSuite) TestGracefulShutdown() {
 	})
 
 	s.Run("concurrent signals", func() {
-		var exitCalled int32
-		mockExit := func(int) { atomic.StoreInt32(&exitCalled, 1) }
+		exitCalls := make(chan int, 4)
 
+		// the case runs on a signal of its own, so that a straggler of the burst below cannot
+		// reach another case. os/signal drops a send to a full channel, so a burst may well be
+		// delivered once, and the exit is left to the timeout rather than to a second signal;
+		// that a second signal forces the exit is what the case above covers
 		_, cancel := GracefulShutdown(
+			WithSignals(syscall.SIGUSR2),
 			WithTimeout(100*time.Millisecond),
-			withOsExit(mockExit),
+			withOsExit(func(code int) { exitCalls <- code }),
 		)
 		defer cancel()
 
-		// Send multiple signals concurrently
+		// send multiple signals concurrently
 		process, err := os.FindProcess(os.Getpid())
-		s.NoError(err) //nolint
-		go process.Signal(os.Interrupt)
-		go process.Signal(os.Interrupt)
-		go process.Signal(syscall.SIGTERM)
+		s.Require().NoError(err)
 
-		time.Sleep(200 * time.Millisecond)
-		s.Equal(int32(1), atomic.LoadInt32(&exitCalled))
+		var wg sync.WaitGroup
+		send := func(sig os.Signal) {
+			defer wg.Done()
+			_ = process.Signal(sig)
+		}
+		wg.Add(4)
+		for range 4 {
+			go send(syscall.SIGUSR2)
+		}
+
+		code := s.awaitExit(exitCalls)
+		wg.Wait()
+		s.Equal(1, code)
 	})
 
 	s.Run("timeout accuracy", func() {
-		start := time.Now()
 		timeout := 200 * time.Millisecond
-		mockExit := func(int) {}
+		// the shutdown callback runs when the signal arrives, which is when the timer starts
+		startCalls, exitCalls := make(chan time.Time, 1), make(chan time.Time, 1)
 
+		// the case measures a timer, so it runs on a signal no other case sends
 		_, cancel := GracefulShutdown(
+			WithSignals(syscall.SIGUSR1),
 			WithTimeout(timeout),
-			withOsExit(mockExit),
+			WithOnShutdown(func(os.Signal) { startCalls <- time.Now() }),
+			withOsExit(func(int) { exitCalls <- time.Now() }),
 		)
 		defer cancel()
 
 		process, err := os.FindProcess(os.Getpid())
 		s.NoError(err)
-		s.NoError(process.Signal(os.Interrupt))
+		s.NoError(process.Signal(syscall.SIGUSR1))
 
-		time.Sleep(300 * time.Millisecond)
-		elapsed := time.Since(start)
-		s.InDelta(timeout, elapsed, float64(150*time.Millisecond))
+		var started, exited time.Time
+		for _, c := range []struct {
+			ch  chan time.Time
+			dst *time.Time
+			msg string
+		}{{startCalls, &started, "shutdown callback was not called"}, {exitCalls, &exited, "forced exit was not called"}} {
+			select {
+			case *c.dst = <-c.ch:
+			case <-time.After(waitLimit):
+				s.Fail(c.msg)
+				return
+			}
+		}
+
+		// the forced exit must never happen early; the upper bound stays loose enough to
+		// survive a delayed timer while still catching a timeout off by an order of magnitude
+		elapsed := exited.Sub(started)
+		s.GreaterOrEqual(elapsed, timeout)
+		s.Less(elapsed, 10*timeout)
 	})
 }

@@ -27,7 +27,7 @@ func TestShutdownHTTPServer(t *testing.T) {
 	require.NoError(t, err)
 	server.Addr = listener.Addr().String()
 
-	// start the server
+	// start the server, the listener already accepts connections so no wait is needed
 	go func() {
 		serveErr := server.Serve(listener)
 		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
@@ -35,11 +35,10 @@ func TestShutdownHTTPServer(t *testing.T) {
 		}
 	}()
 
-	// let the server start
-	time.Sleep(100 * time.Millisecond)
-
-	// verify server is running by making a request
-	resp, err := http.Get("http://" + server.Addr)
+	// verify server is running by making a request, bounded so a stuck server fails the test
+	// rather than hanging it
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://" + server.Addr)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -82,17 +81,16 @@ func TestRunHTTPServerWithContext(t *testing.T) {
 			return server.Serve(listener)
 		}
 
-		// run server with context
+		// run server with context, the listener already accepts connections so no wait is needed
 		errCh := RunHTTPServerWithContext(ctx, server, startFn,
 			WithHTTPLogger(logger),
 			WithHTTPShutdownTimeout(3*time.Second),
 		)
 
-		// let the server start
-		time.Sleep(100 * time.Millisecond)
-
-		// verify server is running by making a request
-		resp, err := http.Get("http://" + server.Addr)
+		// verify server is running by making a request, bounded so a stuck server fails the test
+		// rather than hanging it
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get("http://" + server.Addr)
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		resp.Body.Close()
