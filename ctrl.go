@@ -1,5 +1,5 @@
 // Package ctrl provides a set of control functions for assertions, error handling, HTTP server management,
-// and graceful shutdown handling in Go applications. Built for Go 1.21+, it offers a clean API with flexible
+// and graceful shutdown handling in Go applications. Built for Go 1.23+, it offers a clean API with flexible
 // configuration options and no external runtime dependencies.
 //
 // # Assertions
