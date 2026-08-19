@@ -49,7 +49,7 @@ func main() {
         ctrl.WithHTTPShutdownTimeout(5*time.Second),
     )
 
-    // Wait for server to exit and check for errors
+    // Wait for the server to stop, the graceful shutdown included
     if err := <-errCh; err != nil {
         log.Fatalf("Server error: %v", err)
     }
@@ -143,6 +143,17 @@ errCh := ctrl.RunHTTPServerWithContext(ctx, server,
     ctrl.WithHTTPLogger(logger),
 )
 ```
+
+When `RunHTTPServerWithContext` publishes its result depends on how the server stops. On context
+cancellation it comes once the graceful shutdown has drained the connections, so receiving from the
+channel is a safe point to terminate the process, and anything the handlers still need has to outlive
+that receive. If the shutdown timeout expires first, the shutdown error is delivered on the channel
+instead of being logged and discarded, requests may still be running at that point, and the start
+function is not waited for; the error can be inspected with `errors.Is(err, context.DeadlineExceeded)`.
+A server that fails on its own reports right away and is left untouched, so a failed start can be
+retried on it. Connections that `net/http` does not wait for, hijacked ones and those dropped by
+`Server.Close` among them, remain the caller's to track, as do the callbacks of
+`Server.RegisterOnShutdown`, which `Shutdown` starts without awaiting them.
 
 ### Graceful Shutdown
 
@@ -361,7 +372,8 @@ if err := ctrl.ShutdownHTTPServer(ctx, server); err != nil {
     log.Printf("error during server shutdown: %v", err)
 }
 
-// Running HTTP server with context
+// Running HTTP server with context, the error covers both the serving
+// and the graceful shutdown stage
 errCh := ctrl.RunHTTPServerWithContext(ctx, server, server.ListenAndServe)
 if err := <-errCh; err != nil {
     log.Fatalf("server error: %v", err)
