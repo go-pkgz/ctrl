@@ -3,6 +3,7 @@ package ctrl
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -51,6 +52,16 @@ func ShutdownHTTPServer(ctx context.Context, server *http.Server, opts ...HTTPOp
 // when the provided context is canceled.
 // The startFn is responsible for starting the server (e.g., ListenAndServe).
 // It returns a channel that will receive any error from the server.
+//
+// When the result is published depends on how the server stops. On context cancellation it comes
+// after the graceful shutdown drained the connections, so the caller may terminate the process at
+// that point; if the shutdown timeout expires first, the shutdown error is published as soon as the
+// timeout is reported, requests may well still be running, and startFn is not waited for, so a
+// serving error surfacing after that point is not reported. The error can be inspected with
+// errors.Is(err, context.DeadlineExceeded). A server that fails on its own reports right away and is
+// left untouched, so the caller can start it again. Connections that net/http does not wait for,
+// hijacked ones and those dropped by Server.Close among them, remain the caller's to track, as do
+// the callbacks of Server.RegisterOnShutdown, which Shutdown starts without awaiting them.
 func RunHTTPServerWithContext(ctx context.Context, server *http.Server, startFn func() error, opts ...HTTPOption) <-chan error {
 	options := httpOptions{
 		shutdownTimeout: 10 * time.Second, // default timeout
@@ -61,35 +72,77 @@ func RunHTTPServerWithContext(ctx context.Context, server *http.Server, startFn 
 		opt(&options)
 	}
 
-	// channel to report server errors
+	// channel to report the final result to the caller
 	errCh := make(chan error, 1)
 
-	// start server
-	go func() {
-		err := startFn()
+	// serveCh collects the result of startFn, always exactly one value
+	serveCh := make(chan error, 1)
+	go func() { serveCh <- startFn() }()
 
-		// only report non-shutdown errors
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		} else {
-			errCh <- nil
+	// single coordinator owning errCh, it publishes only after the server stopped
+	go func() {
+		defer close(errCh)
+
+		select {
+		case err := <-serveCh:
+			// the server gave up on its own, the caller learns why immediately and keeps the
+			// server intact, so a failed start can be retried on it
+			errCh <- serveResult(err)
+			return
+		case <-ctx.Done():
+			// both can be ready at once, and a server that already stopped is not shut down
+			select {
+			case err := <-serveCh:
+				errCh <- serveResult(err)
+				return
+			default:
+			}
 		}
-		close(errCh)
-	}()
-
-	// handle graceful shutdown
-	go func() {
-		<-ctx.Done()
 
 		options.logger.Info("shutting down HTTP server")
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), options.shutdownTimeout)
+		// the parent context is already canceled, so the shutdown gets its own deadline while
+		// keeping the context values
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), options.shutdownTimeout)
 		defer cancel()
 
-		if err := server.Shutdown(shutdownCtx); err != nil { //nolint:contextcheck // context non-inherited intentionally
-			options.logger.Error("server shutdown error", "error", err)
+		shutdownErr := server.Shutdown(shutdownCtx)
+		if shutdownErr != nil {
+			options.logger.Error("server shutdown error", "error", shutdownErr)
+			shutdownErr = fmt.Errorf("shutdown http server: %w", shutdownErr)
+		}
+
+		var serveErr error
+		if shutdownErr == nil {
+			// the drain is over, startFn returns as soon as the listeners are closed
+			serveErr = serveResult(<-serveCh)
+		} else {
+			// the drain already gave up, waiting on startFn on top of that would defeat the timeout
+			select {
+			case err := <-serveCh:
+				serveErr = serveResult(err)
+			default:
+			}
+		}
+
+		switch {
+		case serveErr != nil && shutdownErr != nil:
+			errCh <- errors.Join(serveErr, shutdownErr)
+		case serveErr != nil:
+			errCh <- serveErr
+		default:
+			errCh <- shutdownErr
 		}
 	}()
 
 	return errCh
+}
+
+// serveResult converts the result of the server start function to the value reported to the caller,
+// dropping the expected ErrServerClosed produced by a graceful shutdown.
+func serveResult(err error) error {
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }

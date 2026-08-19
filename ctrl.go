@@ -46,7 +46,9 @@
 //	err := ctrl.ShutdownHTTPServer(ctx, server,
 //	    ctrl.WithHTTPShutdownTimeout(5*time.Second))
 //
-//	// Run a server with context-aware shutdown
+//	// Run a server with context-aware shutdown, the returned channel delivers the result
+//	// only after the server stopped, on cancellation once the shutdown drained the
+//	// connections or its timeout expired
 //	errCh := ctrl.RunHTTPServerWithContext(ctx, server,
 //	    func() error { return server.ListenAndServe() },
 //	    ctrl.WithHTTPShutdownTimeout(5*time.Second),
